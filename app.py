@@ -4,6 +4,11 @@ import sys
 from pathlib import Path
 
 
+def _asset(relative: str) -> Path:
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    return base / relative
+
+
 def _restart(window) -> None:
     from PySide6.QtCore import QProcess
     from PySide6.QtWidgets import QApplication, QMessageBox
@@ -32,7 +37,7 @@ def main() -> int:
     app.setApplicationName("FloatNote")
 
     base = Path(__file__).resolve().parent
-    icon = QIcon(str(base / "assets" / "floatnote.ico"))
+    icon = QIcon(str(_asset("assets/floatnote.ico")))
     app.setWindowIcon(icon)
 
     text = load_notes()
@@ -56,6 +61,9 @@ def main() -> int:
         tray.setToolTip("FloatNote 悬浮便签")
         menu = QMenu()
         menu.addAction("显示 / 隐藏面板", window.toggle_visibility)
+        menu.addAction(
+            "快捷键设置…", lambda: QTimer.singleShot(200, window._open_hotkey_settings)
+        )
         menu.addSeparator()
         menu.addAction("重启", lambda: _restart(window))
         menu.addAction("退出", app.quit)

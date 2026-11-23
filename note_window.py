@@ -24,19 +24,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from store import Config
+from store import Config, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN
 from history_view import HistoryWindow
+from hotkey_view import HotkeyWindow
 
 PAD = 10
 MAX_SCREEN_RATIO = 0.8
 
-HOTKEY_LABEL = "Win+Shift+Q"
 HOTKEY_ID = 0x464E
 WM_HOTKEY = 0x0312
-MOD_SHIFT = 0x0004
-MOD_WIN = 0x0008
-MOD_NOREPEAT = 0x4000
-VK_Q = 0x51
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 
@@ -111,6 +107,7 @@ class NoteWindow(QWidget):
         self._drag_offset = None
         self._editor: _Editor | None = None
         self._history_dialog: HistoryWindow | None = None
+        self._hotkey_window: HotkeyWindow | None = None
 
         self.setWindowTitle("FloatNote")
         self.setWindowFlags(
@@ -218,9 +215,11 @@ class NoteWindow(QWidget):
     # ---------- hotkey ----------
 
     def _register_hotkey(self) -> bool:
-        modifiers = MOD_WIN | MOD_SHIFT | MOD_NOREPEAT
+        modifiers = self.cfg.hotkey_mods | MOD_NOREPEAT
         return bool(
-            user32.RegisterHotKey(int(self.winId()), HOTKEY_ID, modifiers, VK_Q)
+            user32.RegisterHotKey(
+                int(self.winId()), HOTKEY_ID, modifiers, self.cfg.hotkey_vk
+            )
         )
 
     def toggle_visibility(self) -> None:
@@ -410,12 +409,15 @@ class NoteWindow(QWidget):
         menu = QMenu(self)
         menu.addAction("编辑内容", lambda: QTimer.singleShot(0, self._enter_edit))
         if self._hotkey_ok:
-            menu.addAction(f"隐藏（{HOTKEY_LABEL}）", lambda: self.toggle_visibility())
+            menu.addAction(f"隐藏（{self.cfg.hotkey_label}）", lambda: self.toggle_visibility())
         else:
-            blocked = QAction(f"{HOTKEY_LABEL} 被其他程序占用", menu)
+            blocked = QAction(f"{self.cfg.hotkey_label} 被其他程序占用", menu)
             blocked.setEnabled(False)
             menu.addAction(blocked)
         menu.addAction("查看变更记录…", lambda: QTimer.singleShot(200, self._open_history))
+        menu.addAction(
+            "快捷键设置…", lambda: QTimer.singleShot(200, self._open_hotkey_settings)
+        )
 
         font_menu = menu.addMenu("字号")
         for size in FONT_SIZES:
@@ -480,6 +482,50 @@ class NoteWindow(QWidget):
 
     def _history_closed(self, _result: int = 0) -> None:
         self._history_dialog = None
+
+    def _open_hotkey_settings(self) -> None:
+        if QApplication.activePopupWidget() is not None:
+            QTimer.singleShot(30, self._open_hotkey_settings)
+            return
+        window = self._hotkey_window
+        if window is not None and window.isVisible():
+            window.raise_()
+            window.activateWindow()
+            return
+        window = HotkeyWindow(
+            self.cfg.hotkey_mods,
+            self.cfg.hotkey_vk,
+            self.cfg.hotkey_label,
+            self.set_hotkey,
+        )
+        self._hotkey_window = window
+        window.closed.connect(self._hotkey_window_closed)
+        window.show()
+        user32.ShowWindow(int(window.winId()), 1)
+        window.raise_()
+        window.activateWindow()
+        window.capture.setFocus()
+
+    def _hotkey_window_closed(self) -> None:
+        self._hotkey_window = None
+
+    def set_hotkey(self, mods: int, vk: int, label: str) -> bool:
+        hwnd = int(self.winId())
+        old_mods, old_vk = self.cfg.hotkey_mods, self.cfg.hotkey_vk
+        if self._hotkey_ok:
+            user32.UnregisterHotKey(hwnd, HOTKEY_ID)
+            self._hotkey_ok = False
+        if user32.RegisterHotKey(hwnd, HOTKEY_ID, mods | MOD_NOREPEAT, vk):
+            self.cfg.hotkey_mods = mods
+            self.cfg.hotkey_vk = vk
+            self.cfg.hotkey_label = label
+            self._hotkey_ok = True
+            self._on_config_change(self.cfg)
+            return True
+        self._hotkey_ok = bool(
+            user32.RegisterHotKey(hwnd, HOTKEY_ID, old_mods | MOD_NOREPEAT, old_vk)
+        )
+        return False
 
     def _apply(self, **changes) -> None:
         for key, value in changes.items():

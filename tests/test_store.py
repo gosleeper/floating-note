@@ -32,7 +32,18 @@ class ConfigTests(unittest.TestCase):
         self.assertIsNone(cfg.x)
 
     def test_roundtrip(self) -> None:
-        cfg = store.Config(x=120, y=340, width=520, font_size=24, color="#ffcc00", opacity=0.7, outline=False)
+        cfg = store.Config(
+            x=120,
+            y=340,
+            width=520,
+            font_size=24,
+            color="#ffcc00",
+            opacity=0.7,
+            outline=False,
+            hotkey_mods=store.MOD_CONTROL | store.MOD_ALT,
+            hotkey_vk=0x48,
+            hotkey_label="Ctrl+Alt+H",
+        )
         store.save_config(cfg, self.config_path)
         loaded = store.load_config(self.config_path)
         self.assertEqual(loaded, cfg)
@@ -56,6 +67,9 @@ class ConfigTests(unittest.TestCase):
                     "color": "red",
                     "opacity": 5,
                     "outline": "yes",
+                    "hotkey_mods": 0,
+                    "hotkey_vk": 0,
+                    "hotkey_label": "",
                 }
             ),
             encoding="utf-8",
@@ -68,6 +82,9 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(cfg.outline)
         self.assertIsNone(cfg.x)
         self.assertIsNone(cfg.y)
+        self.assertEqual(cfg.hotkey_label, store.DEFAULT_HOTKEY_LABEL)
+        self.assertEqual(cfg.hotkey_mods, store.DEFAULT_HOTKEY_MODS)
+        self.assertEqual(cfg.hotkey_vk, store.DEFAULT_HOTKEY_VK)
 
     def test_notes_default_created_then_roundtrip(self) -> None:
         text = store.load_notes(self.notes_path)

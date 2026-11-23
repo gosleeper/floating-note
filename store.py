@@ -4,13 +4,17 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
-APP_DIR = Path(__file__).resolve().parent
+if getattr(sys, "frozen", False):
+    APP_DIR = Path(sys.executable).resolve().parent
+else:
+    APP_DIR = Path(__file__).resolve().parent
 NOTES_FILE = APP_DIR / "notes.txt"
 CONFIG_FILE = APP_DIR / "config.json"
 HISTORY_DIR = APP_DIR / "notes-history"
@@ -20,6 +24,17 @@ DEFAULT_TEXT = "双击这里开始记录\n右键调整样式"
 WIDTH_RANGE = (240, 1200)
 FONT_RANGE = (10, 64)
 OPACITY_RANGE = (0.2, 1.0)
+
+MOD_ALT = 0x0001
+MOD_CONTROL = 0x0002
+MOD_SHIFT = 0x0004
+MOD_WIN = 0x0008
+MOD_NOREPEAT = 0x4000
+HOTKEY_MODS_MASK = MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_WIN
+
+DEFAULT_HOTKEY_MODS = MOD_WIN | MOD_SHIFT
+DEFAULT_HOTKEY_VK = 0x51  # Q
+DEFAULT_HOTKEY_LABEL = "Win+Shift+Q"
 
 
 @dataclass
@@ -31,6 +46,9 @@ class Config:
     color: str = "#ffffff"
     opacity: float = 1.0
     outline: bool = True
+    hotkey_mods: int = DEFAULT_HOTKEY_MODS
+    hotkey_vk: int = DEFAULT_HOTKEY_VK
+    hotkey_label: str = DEFAULT_HOTKEY_LABEL
 
 
 def _clamp(value, low, high):
@@ -70,6 +88,21 @@ def config_from_dict(raw: dict) -> Config:
     outline = raw.get("outline")
     if isinstance(outline, bool):
         cfg.outline = outline
+
+    hotkey_mods = _as_int(raw.get("hotkey_mods"))
+    hotkey_vk = _as_int(raw.get("hotkey_vk"))
+    hotkey_label = raw.get("hotkey_label")
+    if (
+        hotkey_mods is not None
+        and hotkey_mods & HOTKEY_MODS_MASK
+        and hotkey_vk is not None
+        and 0 < hotkey_vk <= 0xFF
+        and isinstance(hotkey_label, str)
+        and 0 < len(hotkey_label) <= 40
+    ):
+        cfg.hotkey_mods = hotkey_mods & HOTKEY_MODS_MASK
+        cfg.hotkey_vk = hotkey_vk
+        cfg.hotkey_label = hotkey_label
 
     return cfg
 
@@ -114,6 +147,9 @@ def save_config(cfg: Config, path: Path = CONFIG_FILE) -> None:
         "color": cfg.color,
         "opacity": cfg.opacity,
         "outline": cfg.outline,
+        "hotkey_mods": cfg.hotkey_mods,
+        "hotkey_vk": cfg.hotkey_vk,
+        "hotkey_label": cfg.hotkey_label,
     }
     _write_atomic(Path(path), json.dumps(payload, ensure_ascii=False, indent=2))
 

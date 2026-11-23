@@ -7,3 +7,6 @@ config.json
 error.log
 notes-history/
 backups/
+build/
+dist/
+*.spec
