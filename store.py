@@ -3,14 +3,17 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import tempfile
 import time
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 
 APP_DIR = Path(__file__).resolve().parent
 NOTES_FILE = APP_DIR / "notes.txt"
 CONFIG_FILE = APP_DIR / "config.json"
+HISTORY_DIR = APP_DIR / "notes-history"
 
 DEFAULT_TEXT = "双击这里开始记录\n右键调整样式"
 
@@ -132,3 +135,174 @@ def save_notes(text: str, path: Path = NOTES_FILE) -> None:
 
 def with_changes(cfg: Config, **changes) -> Config:
     return replace(cfg, **changes)
+
+
+GIT_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
+
+def _log_error(message: str) -> None:
+    try:
+        with (APP_DIR / "error.log").open("a", encoding="utf-8") as handle:
+            handle.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {message}\n")
+    except OSError:
+        pass
+
+
+def _git(args: list[str], cwd: Path, env: dict | None = None):
+    try:
+        return subprocess.run(
+            ["git", *args],
+            cwd=str(cwd),
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=GIT_NO_WINDOW,
+            env=env,
+        )
+    except OSError as exc:
+        _log_error(f"git 不可用: {exc}")
+        return None
+
+
+def _commit_history(history_dir: Path, text: str, stamp: datetime) -> None:
+    history_dir = Path(history_dir)
+    try:
+        _write_atomic(history_dir / "notes.txt", text)
+    except OSError as exc:
+        _log_error(f"写历史副本失败: {exc}")
+        return
+
+    if not (history_dir / ".git").exists():
+        result = _git(["init", "-q"], history_dir)
+        if result is None or result.returncode != 0:
+            _log_error("git init 失败")
+            return
+
+    _git(["add", "notes.txt"], history_dir)
+    diff = _git(["diff", "--cached", "--quiet"], history_dir)
+    if diff is None or diff.returncode == 0:
+        return
+
+    env = os.environ.copy()
+    env["GIT_AUTHOR_DATE"] = stamp.strftime("%Y-%m-%dT%H:%M:%S")
+    env["GIT_COMMITTER_DATE"] = env["GIT_AUTHOR_DATE"]
+    result = _git(
+        [
+            "-c", "user.name=FloatNote",
+            "-c", "user.email=floatnote@local",
+            "commit", "-q", "-m",
+            f"notes {stamp:%Y-%m-%d %H:%M:%S}",
+        ],
+        history_dir,
+        env=env,
+    )
+    if result is None or result.returncode != 0:
+        detail = result.stderr.strip() if result else ""
+        _log_error(f"git commit 失败: {detail}")
+
+
+def start_history(
+    text: str,
+    *,
+    history_dir: Path = HISTORY_DIR,
+    now: datetime | None = None,
+) -> None:
+    _commit_history(history_dir, text, now or datetime.now())
+
+
+def record_history(
+    new_text: str,
+    *,
+    notes_path: Path = NOTES_FILE,
+    history_dir: Path = HISTORY_DIR,
+    now: datetime | None = None,
+) -> None:
+    stamp = now or datetime.now()
+    save_notes(new_text, notes_path)
+    _commit_history(history_dir, new_text, stamp)
+
+
+def history_bounds(
+    *, history_dir: Path = HISTORY_DIR
+) -> tuple[datetime | None, datetime | None]:
+    if not (Path(history_dir) / ".git").exists():
+        return None, None
+    result = _git(["log", "--format=%ct"], history_dir)
+    if result is None or result.returncode != 0:
+        return None, None
+    stamps = sorted(int(v) for v in result.stdout.split() if v.strip())
+    if not stamps:
+        return None, None
+    return datetime.fromtimestamp(stamps[0]), datetime.fromtimestamp(stamps[-1])
+
+
+def history_increment(
+    start: datetime,
+    end: datetime,
+    *,
+    history_dir: Path = HISTORY_DIR,
+) -> str:
+    header = f"{start:%Y-%m-%d %H:%M:%S} ~ {end:%Y-%m-%d %H:%M:%S}"
+    if not (Path(history_dir) / ".git").exists():
+        return f"{header}\n\n还没有保存历史。退出一次编辑后就会有记录。"
+
+    result = _git(
+        ["log", "--reverse", "--format=%x01%H%x09%ct", "-p", "--unified=0", "--no-color"],
+        Path(history_dir),
+    )
+    if result is None or result.returncode != 0:
+        return f"{header}\n\n读取历史失败，详情见 error.log。"
+
+    start_epoch = int(start.timestamp())
+    end_epoch = int(end.timestamp())
+
+    blocks = []
+    current = None
+    for raw in result.stdout.splitlines():
+        if raw.startswith("\x01"):
+            if current is not None:
+                blocks.append(current)
+            parts = raw[1:].split("\t")
+            try:
+                epoch = int(parts[1])
+            except (IndexError, ValueError):
+                epoch = 0
+            current = {"epoch": epoch, "added": [], "removed": []}
+            continue
+        if current is None:
+            continue
+        if raw.startswith("+"):
+            if raw.startswith("+++ ") or raw.startswith("+++b/"):
+                continue
+            current["added"].append(raw[1:])
+        elif raw.startswith("-"):
+            if raw.startswith("--- ") or raw.startswith("---a/"):
+                continue
+            current["removed"].append(raw[1:])
+    if current is not None:
+        blocks.append(current)
+
+    lines = [f"变更范围：{header}", ""]
+    shown = 0
+    for block in blocks:
+        if not (start_epoch <= block["epoch"] <= end_epoch):
+            continue
+        if not block["added"] and not block["removed"]:
+            continue
+        stamp = datetime.fromtimestamp(block["epoch"])
+        lines.append(f"[{stamp:%Y-%m-%d %H:%M:%S}]")
+        for item in block["added"]:
+            if item.strip():
+                lines.append(f"  + {item}")
+        for item in block["removed"]:
+            if item.strip():
+                lines.append(f"  - {item}")
+        lines.append("")
+        shown += 1
+        if len(lines) > 4000:
+            lines.append("……内容过长已截断，可在 notes-history 里用 git log 查看完整历史。")
+            break
+
+    if shown == 0:
+        lines.append("该时间段没有变更记录。")
+    return "\n".join(lines).rstrip() + "\n"

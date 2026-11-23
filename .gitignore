@@ -5,3 +5,5 @@ __pycache__/
 notes.txt
 config.json
 error.log
+notes-history/
+backups/

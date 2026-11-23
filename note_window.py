@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
+import ctypes
+import ctypes.wintypes as wt
+
+from PySide6.QtCore import QAbstractNativeEventFilter, QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -22,9 +25,20 @@ from PySide6.QtWidgets import (
 )
 
 from store import Config
+from history_view import HistoryWindow
 
 PAD = 10
 MAX_SCREEN_RATIO = 0.8
+
+HOTKEY_LABEL = "Win+Shift+Q"
+HOTKEY_ID = 0x464E
+WM_HOTKEY = 0x0312
+MOD_SHIFT = 0x0004
+MOD_WIN = 0x0008
+MOD_NOREPEAT = 0x4000
+VK_Q = 0x51
+
+user32 = ctypes.WinDLL("user32", use_last_error=True)
 
 FONT_SIZES = (12, 14, 16, 18, 20, 22, 24, 28, 32, 36)
 OPACITIES = (100, 90, 80, 70, 60, 50, 40, 30)
@@ -60,6 +74,26 @@ class _Editor(QPlainTextEdit):
         self._on_finish()
 
 
+class _HotkeyFilter(QAbstractNativeEventFilter):
+    def __init__(self, window: "NoteWindow") -> None:
+        super().__init__()
+        self._window = window
+        self._last_time = None
+
+    def nativeEventFilter(self, event_type, message):
+        if event_type not in (b"windows_generic_MSG", b"windows_dispatcher_MSG"):
+            return False
+        msg = ctypes.cast(int(message), ctypes.POINTER(wt.MSG)).contents
+        if msg.message != WM_HOTKEY or msg.wParam != HOTKEY_ID:
+            return False
+        # Qt 会把同一条 WM_HOTKEY 投递两次，按消息时间戳去重
+        if msg.time == self._last_time:
+            return True
+        self._last_time = msg.time
+        self._window.toggle_visibility()
+        return True
+
+
 class NoteWindow(QWidget):
     def __init__(self, config: Config, text: str, on_config_change, on_text_change) -> None:
         super().__init__()
@@ -76,16 +110,22 @@ class NoteWindow(QWidget):
         self._dragging = False
         self._drag_offset = None
         self._editor: _Editor | None = None
+        self._history_dialog: HistoryWindow | None = None
 
         self.setWindowTitle("FloatNote")
         self.setWindowFlags(
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setWindowOpacity(self.cfg.opacity)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
         self._apply_font()
         self._relayout()
         self._place_window()
+
+        self._hotkey_ok = False
+        self._hotkey_filter = _HotkeyFilter(self)
+        QApplication.instance().installNativeEventFilter(self._hotkey_filter)
+        self._hotkey_ok = self._register_hotkey()
 
     # ---------- appearance ----------
 
@@ -175,6 +215,32 @@ class NoteWindow(QWidget):
         self.cfg.y = self.pos().y()
         self._on_config_change(self.cfg)
 
+    # ---------- hotkey ----------
+
+    def _register_hotkey(self) -> bool:
+        modifiers = MOD_WIN | MOD_SHIFT | MOD_NOREPEAT
+        return bool(
+            user32.RegisterHotKey(int(self.winId()), HOTKEY_ID, modifiers, VK_Q)
+        )
+
+    def toggle_visibility(self) -> None:
+        if self.isVisible():
+            if self._editor is not None:
+                self._exit_edit()
+            self.hide()
+        else:
+            self.show()
+            self.raise_()
+
+    def release_hotkey(self) -> None:
+        if self._hotkey_ok:
+            user32.UnregisterHotKey(int(self.winId()), HOTKEY_ID)
+            self._hotkey_ok = False
+
+    def restore_hotkey(self) -> bool:
+        self._hotkey_ok = self._register_hotkey()
+        return self._hotkey_ok
+
     # ---------- painting ----------
 
     def paintEvent(self, event) -> None:
@@ -189,7 +255,12 @@ class NoteWindow(QWidget):
             return
 
         text_color = QColor(self.cfg.color)
-        outline_color = QColor("#000000") if _luminance(text_color) > 140 else QColor("#ffffff")
+        text_color.setAlphaF(self.cfg.opacity)
+        base_color = QColor(self.cfg.color)
+        outline_color = (
+            QColor("#000000") if _luminance(base_color) > 140 else QColor("#ffffff")
+        )
+        outline_color.setAlphaF(self.cfg.opacity)
         pen = QPen(
             outline_color,
             max(2.0, self.cfg.font_size * 0.12),
@@ -331,8 +402,20 @@ class NoteWindow(QWidget):
         if self._editor is not None:
             return
 
+        menu = self._build_menu()
+        menu.exec(event.globalPos())
+        event.accept()
+
+    def _build_menu(self) -> QMenu:
         menu = QMenu(self)
         menu.addAction("编辑内容", lambda: QTimer.singleShot(0, self._enter_edit))
+        if self._hotkey_ok:
+            menu.addAction(f"隐藏（{HOTKEY_LABEL}）", lambda: self.toggle_visibility())
+        else:
+            blocked = QAction(f"{HOTKEY_LABEL} 被其他程序占用", menu)
+            blocked.setEnabled(False)
+            menu.addAction(blocked)
+        menu.addAction("查看变更记录…", lambda: QTimer.singleShot(200, self._open_history))
 
         font_menu = menu.addMenu("字号")
         for size in FONT_SIZES:
@@ -371,13 +454,32 @@ class NoteWindow(QWidget):
         menu.addSeparator()
         menu.addAction("重置位置", lambda: self._reset_position())
         menu.addAction("退出", lambda: QApplication.instance().quit())
-        menu.exec(event.globalPos())
-        event.accept()
+        return menu
 
     def _pick_color(self) -> None:
         color = QColorDialog.getColor(QColor(self.cfg.color), self, "选择文字颜色")
         if color.isValid():
             self._apply(color=color.name())
+
+    def _open_history(self) -> None:
+        if QApplication.activePopupWidget() is not None:
+            QTimer.singleShot(30, self._open_history)
+            return
+        dialog = self._history_dialog
+        if dialog is not None and dialog.isVisible():
+            dialog.raise_()
+            dialog.activateWindow()
+            return
+        dialog = HistoryWindow()
+        self._history_dialog = dialog
+        dialog.closed.connect(self._history_closed)
+        dialog.show()
+        # 该 Qt 版本从菜单定时器里 show() 后，原生窗口可能仍是隐藏状态（Qt 侧 isVisible 为真）
+        user32.ShowWindow(int(dialog.winId()), 1)
+        dialog.raise_()
+
+    def _history_closed(self, _result: int = 0) -> None:
+        self._history_dialog = None
 
     def _apply(self, **changes) -> None:
         for key, value in changes.items():
@@ -387,8 +489,6 @@ class NoteWindow(QWidget):
         if "font_size" in changes or "width" in changes:
             self._relayout()
             self._clamp_to_screen()
-        if "opacity" in changes:
-            self.setWindowOpacity(self.cfg.opacity)
         self.update()
         self._on_config_change(self.cfg)
 
