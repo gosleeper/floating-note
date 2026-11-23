@@ -1,0 +1,9 @@
+[project]
+name = "floating-note"
+version = "0.1.0"
+description = "Always-on-top transparent desktop note overlay for Windows"
+requires-python = ">=3.11"
+dependencies = ["pyside6-essentials>=6.6"]
+
+[tool.uv]
+package = false
