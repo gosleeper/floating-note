@@ -1,133 +1,67 @@
 # FloatNote 悬浮便签
 
-多智能体（或多个会话）并行干活时，经常一转头就忘：这个文件是谁改的？刚才那个 agent 负责哪一步？下一步该谁接手？
+FloatNote 是一张常驻桌面的透明便签。适合在编辑器、浏览器和多个 agent 会话之间记录分工、当前进度和下一步。阅读时只显示描边文字，双击即可在原位补一句。
 
-FloatNote 是一个常驻桌面的透明悬浮记事本。像桌面歌词一样浮在所有窗口之上，把「谁在做什么、做到哪了」随手记下来，抬眼就能看到，不用切窗口翻聊天记录。
+![便签浮在代码窗口上](docs/why-transparent.png)
 
-![demo](docs/demo.png)
+## 下载与安装
 
-## 为什么不用普通便签
+从 [GitHub Releases](https://github.com/gosleeper/floating-note/releases) 下载对应系统和芯片的文件。
 
-系统便签、桌面便签这类工具都是**不透明窗口**，盖在代码或网页上会直接挡住内容，用的时候得来回挪开。
+| 平台 | 文件 | 使用方式 |
+| --- | --- | --- |
+| Windows x64 | `*-setup.exe` | 运行安装程序。缺少 WebView2 时安装程序会联网安装它。 |
+| Windows x64 便携版 | `*-portable.exe` | 本机已有 WebView2 时可以直接运行。升级旧便携版时，先退出旧程序，再把新版 EXE 放到原数据目录。 |
+| macOS Apple Silicon | `*-aarch64.dmg` | 打开磁盘映像，把 FloatNote 拖到“应用程序”。 |
+| macOS Intel | `*-x64.dmg` | 在 Intel Mac 上打开磁盘映像，把 FloatNote 拖到“应用程序”。 |
 
-FloatNote 的背景是全透明的，只保留文字和描边，压在编辑器上也能看清底下的代码——下面就是它浮在 CSS 代码上的实际效果。
-
-![透明悬浮在代码上](docs/why-transparent.png)
-
-## 功能
-
-- 常驻显示 agent 分工与进度（planner / coder / reviewer…），不用来回翻会话记录
-- 多行纯文本备忘，双击浮窗直接编辑
-- 无边框置顶窗口，背景全透明，文字带自动对比色描边
-- 左键任意位置拖动；位置、宽度、字号、颜色、透明度自动记忆
-- 全局快捷键隐藏 / 显示面板，组合键可自定义（右键或托盘 →「快捷键设置…」）
-- 常驻系统托盘：显示/隐藏、快捷键设置、重启、退出
-- 每次保存自动提交到本地 git 历史；右键可按时间段查看增删记录
-- 右键调整字号（12–36）、透明度（30%–100%）、文字颜色、描边开关、宽度
-- 高度随内容增长，超过屏幕可用高度 80% 后内部滚动
-- 数据全部保存在本地纯文本文件中，不上传任何内容
-
-## 环境
-
-- Windows 10 / 11
-- Python 3.11+
-- [uv](https://docs.astral.sh/uv/)
-
-## 快速开始
-
-```bash
-git clone https://github.com/gosleeper/floating-note.git
-cd floating-note
-uv sync
-```
-
-双击 `run.vbs` 启动（无控制台窗口）。想放桌面的话，创建指向 `run.vbs` 的快捷方式即可。
-
-开发调试可前台运行：
-
-```bash
-uv run python app.py
-```
-
-## 便携版（无需 Python）
-
-构建需要本机 Python + uv（运行 exe 的机器不需要）：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File build.ps1
-```
-
-输出 `dist\FloatNote\`（exe + 依赖）和 `dist\FloatNote-portable.zip`。整个文件夹可以放到任意目录，双击 `FloatNote.exe` 即可运行；`notes.txt`、`config.json`、`notes-history\` 都会生成在 **exe 所在目录**，迁移时把这些一起复制。变更记录功能依赖系统已安装 `git`。
+以 Release 页标注的签名状态为准。临时签名的 macOS 包首次打开时，系统可能要求你在“系统设置 → 隐私与安全性”中选择“仍要打开”。[Apple 的首次打开说明](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unidentified-developer-mh40616/mac)
 
 ## 使用
 
 | 操作 | 行为 |
 | --- | --- |
-| 左键按住拖动 | 移动窗口 |
-| 双击 | 进入编辑 |
-| `Win+Shift+Q` | 隐藏 / 显示面板（默认组合键，可在「快捷键设置」里改） |
-| `Esc` / `Ctrl+Enter` / 点窗口外 | 保存并退出编辑 |
-| 右键 | 字号 / 透明度 / 颜色 / 描边 / 宽度 / 变更记录 / 重置位置 / 退出 |
-| 托盘图标 | 单击显示/隐藏；右键菜单可重启或退出 |
-| 滚轮 | 内容超长时滚动 |
+| 拖动文字或便签内空白处 | 移动窗口 |
+| 双击便签 | 编辑正文 |
+| Esc、Ctrl+Enter 或点到其他窗口 | 保存并结束编辑，macOS 也可按 Cmd+Enter |
+| Win+Shift+Q / Control+Option+N | 在 Windows / macOS 上显示或隐藏便签，可在快捷键设置中修改 |
+| 右键便签 | 打开样式、快捷键、历史、数据导入或重置位置 |
+| Windows 托盘 / macOS 菜单栏 | 显示或隐藏便签，打开设置，重启或退出 |
+| 滚轮 | 当正文超过屏幕可用高度的 80% 时滚动 |
 
-## 数据文件
+## 数据和升级
 
-都放在程序目录，纯文本：
+笔记保存在本机。全新安装使用当前账户的应用数据目录，可从“数据与导入”查看路径。
 
-| 文件 | 内容 |
-| --- | --- |
-| `notes.txt` | 备忘正文 |
-| `config.json` | 窗口位置、宽度、字号、颜色、透明度、描边 |
-| `notes-history/` | 本地 git 仓库，每次保存一次提交 |
-| `error.log` | 启动异常、git 失败等日志，出错时才生成 |
+- `notes.txt` 存放 UTF-8 正文。
+- `config.json` 存放外观、位置和快捷键。
+- `notes-history/` 存放本地 Git 历史。系统有 Git 时，保存后会记录版本，可按时间范围查看和复制增删内容。
 
-`notes.txt`、`config.json`、`notes-history/` 都已加入 `.gitignore`，不会提交到代码仓库。备份时复制这些文件/目录即可。
+从 0.2.x 导入时，在“数据与导入”选择包含上述文件的旧版目录，预览后确认。导入会保留来源和当前数据，重启后打开导入副本。系统 Git 缺失时仍可读写正文，历史功能在安装 Git 后可用。备份请复制整个当前数据目录。
 
-## 笔记历史与变更记录
+## 开发与构建
 
-每次保存（退出编辑）自动把内容提交到本地 git 仓库 `notes-history/`，每一版都能找回，包括删掉的行。
-
-右键菜单 →「查看变更记录…」：弹窗里选择起止时间（默认从第一条记录到现在），按保存时间列出这段时间内的增删内容，可一键复制。
-
-![变更记录](docs/history.png)
-
-也可以直接用 git：
+准备 Node.js 22.12+、Rust stable 和对应系统的 [Tauri 构建依赖](https://v2.tauri.app/start/prerequisites/)。Windows 使用 MSVC、Windows SDK 和 WebView2，macOS 使用 Xcode 命令行工具。
 
 ```bash
-git -C notes-history log --oneline            # 所有保存记录
-git -C notes-history show HEAD~1:notes.txt    # 查看上一次保存的内容
-git -C notes-history show <commit>:notes.txt > notes.txt   # 恢复到某个版本
+npm ci
+npm run tauri dev
+npm run build
+cargo test --locked --manifest-path src-tauri/Cargo.toml
 ```
 
-想换机器或重装前，复制 `notes.txt` 和 `notes-history/` 即可完整迁移。旧版生成的 `backups/` 已停用，不再更新，可自行删除。
+本地构建 Windows 安装包：
 
-## 开发
+```powershell
+npm run tauri build -- --bundles nsis -- --locked
+```
+
+在 Mac 上构建当前架构的磁盘映像：
 
 ```bash
-uv run python -m unittest discover -s tests   # 单元测试
-uv run python app.py --screenshot out.png     # 渲染自检，输出窗口截图
+npm run tauri build -- --bundles dmg -- --locked
 ```
 
-## 项目结构
+CI 对 Windows x64、macOS Apple Silicon 和 Intel 分别构建。开发与测试可通过 `FLOATNOTE_DATA_DIR` 使用独立目录。需求与验收标准见 [桌面版设计](docs/superpowers/specs/2026-11-23-floatnote-desktop-design.md)。
 
-```
-app.py          # 入口，托盘、重启/退出、--screenshot 自检
-note_window.py  # 透明浮窗、描边自绘、编辑态、拖动、右键菜单
-history_view.py # 变更记录窗口（按时间范围查看增删）
-store.py        # notes.txt / config.json / git 历史读写
-assets/         # 应用图标
-build.ps1       # PyInstaller 便携版打包脚本
-run.vbs         # 静默启动
-tests/          # 单元测试
-```
-
-## 已知限制
-
-- 内容在退出编辑时才写入文件，编辑过程中强制结束进程可能丢失最后一次改动
-- 关闭「变更记录」窗口只关闭它自己，程序继续在托盘运行；退出请用托盘菜单
-- 仅支持 Windows（依赖 Win32 全局热键与透明窗口）
-- 便携版的历史功能依赖系统已安装 `git`；未安装时保存正常，但没有版本记录
-- 历史仓库都在本机，重装或换机器前需要自行复制 `notes-history/`
-- 不支持待办勾选、多便签、鼠标穿透、开机自启
-- 宽度通过右键菜单调整，暂不支持拖动边缘缩放
+原 Windows 版的 Python 源码仍可用于对照。它使用 `uv sync` 安装依赖，`uv run python app.py` 启动。
