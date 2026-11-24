@@ -1,0 +1,147 @@
+name: Build FloatNote
+
+on:
+  workflow_dispatch:
+    inputs:
+      sign_macos:
+        description: Sign and notarize the macOS builds
+        type: boolean
+        default: false
+  push:
+    branches: [main, 'codex/tauri-desktop']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Windows-x64
+            runner: windows-2022
+            bundles: nsis
+            installer: src-tauri/target/release/bundle/nsis/*-setup.exe
+          - platform: macOS-Apple-Silicon
+            runner: macos-15
+            bundles: dmg
+            macho_arch: arm64
+            installer: src-tauri/target/release/bundle/dmg/*.dmg
+          - platform: macOS-Intel
+            runner: macos-15-intel
+            bundles: dmg
+            macho_arch: x86_64
+            installer: src-tauri/target/release/bundle/dmg/*.dmg
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: rustup toolchain install 1.100.0 --profile minimal --no-self-update
+      - run: rustup override set 1.100.0
+      - run: npm ci
+      - name: Build desktop package
+        if: runner.os != 'macOS' || !inputs.sign_macos
+        env:
+          APPLE_SIGNING_IDENTITY: '-'
+        run: npm run tauri build -- --bundles ${{ matrix.bundles }} -- --locked
+      - name: Build signed and notarized macOS package
+        if: runner.os == 'macOS' && inputs.sign_macos
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          : "${APPLE_CERTIFICATE:?Configure the APPLE_CERTIFICATE secret}"
+          : "${APPLE_CERTIFICATE_PASSWORD:?Configure the APPLE_CERTIFICATE_PASSWORD secret}"
+          : "${APPLE_SIGNING_IDENTITY:?Configure the APPLE_SIGNING_IDENTITY secret}"
+          : "${APPLE_ID:?Configure the APPLE_ID secret}"
+          : "${APPLE_PASSWORD:?Configure the APPLE_PASSWORD secret}"
+          : "${APPLE_TEAM_ID:?Configure the APPLE_TEAM_ID secret}"
+          npm run tauri build -- --bundles dmg -- --locked
+      - run: cargo test --locked --release --features tauri/custom-protocol --manifest-path src-tauri/Cargo.toml
+      - name: Verify Windows executable and startup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $executable = (Resolve-Path 'src-tauri/target/release/floatnote.exe').Path
+          $reader = [IO.BinaryReader]::new([IO.File]::OpenRead($executable))
+          try {
+            $reader.BaseStream.Position = 0x3c
+            $reader.BaseStream.Position = $reader.ReadUInt32()
+            if ($reader.ReadUInt32() -ne 0x4550 -or $reader.ReadUInt16() -ne 0x8664) {
+              throw 'The FloatNote executable is not Windows x64.'
+            }
+          } finally {
+            $reader.Dispose()
+          }
+          node .github/scripts/desktop-smoke.mjs $executable
+      - name: Verify macOS disk image, application and startup
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          EXPECTED_ARCH: ${{ matrix.macho_arch }}
+          SIGN_MACOS: ${{ inputs.sign_macos }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          images=(src-tauri/target/release/bundle/dmg/*.dmg)
+          if ((${#images[@]} != 1)); then
+            echo "Expected exactly one FloatNote disk image; found ${#images[@]}." >&2
+            exit 1
+          fi
+          hdiutil verify "${images[0]}"
+
+          mount_dir=$(mktemp -d "$RUNNER_TEMP/floatnote-volume.XXXXXX")
+          mounted=false
+          cleanup() {
+            if "$mounted"; then
+              hdiutil detach "$mount_dir" || hdiutil detach -force "$mount_dir"
+            fi
+            rmdir "$mount_dir"
+          }
+          trap cleanup EXIT
+          hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$mount_dir" "${images[0]}"
+          mounted=true
+
+          bundle="$mount_dir/FloatNote.app"
+          executable_name=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$bundle/Contents/Info.plist")
+          executable="$bundle/Contents/MacOS/$executable_name"
+          arch=$(lipo -archs "$executable")
+          if [[ "$arch" != "$EXPECTED_ARCH" ]]; then
+            echo "Expected architecture $EXPECTED_ARCH; found $arch." >&2
+            exit 1
+          fi
+          codesign --verify --deep --strict "$bundle"
+          if [[ "$SIGN_MACOS" == 'true' ]]; then
+            xcrun stapler validate "$bundle"
+          fi
+
+          if launcher_status=$(launchctl print "gui/$(id -u)" 2>&1); then
+            node .github/scripts/desktop-smoke.mjs "$executable"
+          else
+            echo "$launcher_status" >&2
+            echo '::warning::The runner has no Aqua session. Startup smoke was skipped.'
+            echo 'DMG, architecture and code signature verified. Startup smoke skipped because the runner has no Aqua session.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FloatNote-${{ matrix.platform }}
+          path: ${{ matrix.installer }}
+          if-no-files-found: error
+      - if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: FloatNote-Windows-x64-portable
+          path: src-tauri/target/release/floatnote.exe
+          if-no-files-found: error
